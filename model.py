@@ -9,20 +9,29 @@ def get_labels():
     f = open('data.json', 'r')
     data = json.load(f)
     f.close()
-    file_categories = {}
-    for elem in data['initial_bundle'] + data['test_bundle']:
+    images, labels = [], []
+    images_test, labels_test = [], []
+    for elem in data['initial_bundle']:
         if elem['subcategory'] and elem['subcategory']['name'] and elem['subcategory']['name'] == 'Cars':
-            file_categories.update({elem['file'].split(os.sep)[-1]: 0})
+            images.append(bytes(elem['file'], 'utf-8'))
+            labels.append([1, 0, 0])
         elif elem['category'] and elem['category']['name'] and elem['category']['name'] == 'Plants':
-            file_categories.update({elem['file'].split(os.sep)[-1]: 2})
+            images.append(bytes(elem['file'], 'utf-8'))
+            labels.append([0, 0, 1])
         else:
-            file_categories.update({elem['file'].split(os.sep)[-1]: 1})
-    labels = []
-    files = sorted(os.listdir('data'))
-    for name in files:
-        if name in file_categories.keys():
-            labels.append(file_categories[name])
-    return labels
+            images.append(bytes(elem['file'], 'utf-8'))
+            labels.append([0, 1, 0])
+    for elem in data['test_bundle']:
+        if elem['subcategory'] and elem['subcategory']['name'] and elem['subcategory']['name'] == 'Cars':
+            images_test.append(bytes(elem['file'], 'utf-8'))
+            labels_test.append([1, 0, 0])
+        elif elem['category'] and elem['category']['name'] and elem['category']['name'] == 'Plants':
+            images_test.append(bytes(elem['file'], 'utf-8'))
+            labels_test.append([0, 0, 1])
+        else:
+            images_test.append(bytes(elem['file'], 'utf-8'))
+            labels_test.append([0, 1, 0])
+    return images, labels, images_test, labels_test
 
 
 def lr_scheduler(epoch, lr):
@@ -96,12 +105,13 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Neural network's hyperparameters
 img_width = 224
-initial_epochs = 20
-fine_tune_epochs = 10
+initial_epochs = 25
+fine_tune_epochs = 15
 patience = (10, 5)
 initial_lr = 0.001
 fine_tune_lr = 0.00002
 dropout_rate = 0.2
+batch_size = 32
 
 # We'll use transfer learning approach with EfficientNetB0 pretrained on ImageNet
 base_model = tf.keras.applications.EfficientNetB0(include_top=False)
@@ -133,24 +143,14 @@ class_names = ['Cars', 'Others', 'Plants']
 # Training initiated if no previous weights found
 if not os.path.isdir('model'):
     # Loading the data and labels
-    labels = get_labels()
-    images_train = tf.keras.utils.image_dataset_from_directory(os.path.dirname(__file__),
-                                                               labels=labels,
-                                                               shuffle=False,
-                                                               seed=0,
-                                                               validation_split=0.2,
-                                                               subset='training',
-                                                               image_size=(img_width, img_width),
-                                                               label_mode='categorical')
-    images_train.shuffle(3000, reshuffle_each_iteration=True)
-    images_test = tf.keras.utils.image_dataset_from_directory(os.path.dirname(__file__),
-                                                              labels=labels,
-                                                              shuffle=False,
-                                                              seed=0,
-                                                              validation_split=0.2,
-                                                              subset='validation',
-                                                              image_size=(img_width, img_width),
-                                                              label_mode='categorical')
+    images_train, labels_train, images_test, labels_test = get_labels()
+    images_train = tf.data.Dataset.from_tensor_slices(images_train).shuffle(3000, reshuffle_each_iteration=True, seed=0).map(parse_image)
+    labels_train = tf.data.Dataset.from_tensor_slices(labels_train).shuffle(3000, reshuffle_each_iteration=True, seed=0)
+    images_train = tf.data.Dataset.zip((images_train, labels_train)).batch(batch_size)
+    images_test = tf.data.Dataset.from_tensor_slices(images_test).map(parse_image)
+    labels_test = tf.data.Dataset.from_tensor_slices(labels_test)
+    images_test = tf.data.Dataset.zip((images_test, labels_test)).batch(batch_size)
+    # images_train.shuffle(3000, reshuffle_each_iteration=True)
     # plot_dataset()
 
     # Pass where we're training top layers of our NN from scratch
@@ -171,8 +171,8 @@ if not os.path.isdir('model'):
 
     # Model training
     history = model.fit(images_train,
-                        epochs=initial_epochs,
                         validation_data=images_test,
+                        epochs=initial_epochs,
                         verbose=1,
                         callbacks=[lr_callback, early_stop])
 
